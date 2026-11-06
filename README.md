@@ -2,13 +2,22 @@
 
 Server-Sent Events (SSE) for [Vapor](https://github.com/vapor/vapor).
 
+## Requirements
+
+| vapor-sse | Vapor | Swift | Platforms |
+|-----------|-------|-------|-----------|
+| 2.x | 5.0.0-beta.4+ | 6.4 | macOS 26.2, iOS 26.2 |
+| 1.x | 4.121.3+ | 6.0 | macOS 10.15, iOS 13 |
+
+The public API is the same in both. Code written against 1.x compiles unchanged on 2.x.
+
 ## Installation
 
 Add `vapor-sse` to your `Package.swift`:
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/kylebrowning/vapor-sse.git", from: "1.0.0-beta"),
+    .package(url: "https://github.com/kylebrowning/vapor-sse.git", from: "2.0.0-beta"),
 ],
 targets: [
     .target(name: "App", dependencies: [
@@ -119,6 +128,33 @@ app.get("events") { req in
 }
 ```
 
+### Sending from several tasks
+
+`SSEContext` is `Sendable`, so a heartbeat can run alongside the real work:
+
+```swift
+app.get("events") { req in
+    req.sse { sse in
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                while true {
+                    try await Task.sleep(for: .seconds(15))
+                    try await sse.sendComment("keep-alive")
+                }
+            }
+            for await update in updates() {
+                try await sse.send(update)
+            }
+            group.cancelAll()
+        }
+    }
+}
+```
+
+Each event is written whole, so concurrent sends never splice into each other. They have no defined order between them, though, so keep `id`-stamped events on one task.
+
+`send` returns once the event has been written. If the client has gone away it throws, which is how a long-running handler finds out it should stop. Sending on a context after its handler has returned throws `SSEStreamClosedError`.
+
 ## API
 
 | Type | Description |
@@ -128,6 +164,8 @@ app.get("events") { req in
 | `Request.sse(_:)` | Creates an SSE response from a route handler |
 | `Response.sse(_:)` | Static factory for SSE responses |
 | `Request.lastEventID` | The `Last-Event-ID` header value, if present |
+| `HTTPField.Name.lastEventID` | The `Last-Event-ID` header name |
+| `SSEStreamClosedError` | Thrown when sending after the stream has ended |
 
 ## License
 
