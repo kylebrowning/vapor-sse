@@ -1,6 +1,19 @@
 import Vapor
-import NIOCore
+
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
 import Foundation
+#endif
+
+/// Thrown by ``SSEContext`` sends once the stream they belong to has ended.
+///
+/// The usual cause is keeping a reference to the context and sending after the
+/// handler has returned. The stream ends when the handler does, so there is no
+/// connection left to write to.
+public struct SSEStreamClosedError: Error, Sendable, Equatable {
+    public init() {}
+}
 
 /// A handle for an active SSE connection. Use it to send events to the client.
 ///
@@ -19,10 +32,11 @@ import Foundation
 /// }
 /// ```
 ///
-/// Each event is written as a single buffer, which Vapor dispatches onto the
-/// connection's event loop as one unit, so events are always delivered whole.
-/// Two tasks sending at the same time cannot splice one event into the middle
-/// of another.
+/// Vapor lends the response body writer to a single task for the life of the
+/// stream, so sends don't touch the connection directly. Each one hands its
+/// serialized event to that task and waits until the event has been written.
+/// Events are written one at a time and each is a single write, so two tasks
+/// sending at the same time cannot splice one event into the middle of another.
 ///
 /// - Important: What concurrent sending does *not* give you is ordering. Two
 ///   tasks racing to send have no defined order between them, so if you are
@@ -30,20 +44,78 @@ import Foundation
 ///   task. Sequential `await`s from one task are always ordered, because each
 ///   send completes before the next begins.
 public final class SSEContext: Sendable {
-    private let writer: AsyncBodyStreamWriter
+    /// A serialized event waiting to be written, and the send waiting on it.
+    struct Outgoing: Sendable {
+        let text: String
+        let written: CheckedContinuation<Void, any Error>
+    }
+
+    private let outbox: AsyncStream<Outgoing>.Continuation
     private let encoder: JSONEncoder
 
-    init(writer: AsyncBodyStreamWriter, encoder: JSONEncoder) {
-        self.writer = writer
+    init(outbox: AsyncStream<Outgoing>.Continuation, encoder: JSONEncoder) {
+        self.outbox = outbox
         self.encoder = encoder
     }
 
+    /// Runs `handler` against a fresh context, writing everything it sends to `writer`.
+    ///
+    /// The handler runs in a child task while this task keeps the writer, which
+    /// is borrowed and can't be captured by another task. Returns once the
+    /// handler has finished and every event it sent has been written. A handler
+    /// error is rethrown. A write error is rethrown too, after the handler has
+    /// been cancelled and has unwound.
+    nonisolated(nonsending) static func run(
+        writer: borrowing any HTTPBodyWriter & ~Escapable,
+        encoder: JSONEncoder,
+        _ handler: @Sendable @escaping (SSEContext) async throws -> Void
+    ) async throws {
+        let (events, outbox) = AsyncStream<Outgoing>.makeStream()
+        let context = SSEContext(outbox: outbox, encoder: encoder)
+
+        // `async let` rather than a task group: a group's body is a closure, and
+        // capturing the borrowed writer in a closure would consume it. Leaving
+        // this scope by throwing cancels the handler and waits for it.
+        async let handlerDone: Void = {
+            // Ending the outbox ends the write loop below, once it has drained
+            // what was already sent.
+            defer { outbox.finish() }
+            try await handler(context)
+        }()
+
+        for await event in events {
+            do {
+                try await writer.write(event.text)
+                event.written.resume()
+            } catch {
+                event.written.resume(throwing: error)
+                // The connection is gone. Close the outbox so later sends fail
+                // straight away, then fail anything already queued, so no send
+                // is left waiting on a write that will never happen.
+                outbox.finish()
+                for await queued in events {
+                    queued.written.resume(throwing: error)
+                }
+                throw error
+            }
+        }
+
+        try await handlerDone
+    }
+
     /// Sends a ``ServerSentEvent`` to the client.
+    ///
+    /// Returns once the event has been written to the connection.
+    ///
+    /// - Throws: The write error if the client has gone away, or
+    ///   ``SSEStreamClosedError`` if the stream has already ended.
     public func send(_ event: ServerSentEvent) async throws {
-        let serialized = event.serialize()
-        var buffer = ByteBufferAllocator().buffer(capacity: serialized.utf8.count)
-        buffer.writeString(serialized)
-        try await writer.writeBuffer(buffer)
+        let text = event.serialize()
+        try await withCheckedThrowingContinuation { (written: CheckedContinuation<Void, any Error>) in
+            if case .terminated = outbox.yield(Outgoing(text: text, written: written)) {
+                written.resume(throwing: SSEStreamClosedError())
+            }
+        }
     }
 
     /// Sends a data-only event with a raw string.

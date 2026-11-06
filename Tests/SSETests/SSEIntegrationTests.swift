@@ -13,11 +13,12 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
+            try await app.testing { client in
+                let res = try await client.get("events")
                 #expect(res.status == .ok)
-                #expect(res.headers.first(name: .contentType) == "text/event-stream")
-                #expect(res.headers.first(name: .cacheControl) == "no-cache")
-                #expect(res.headers.first(name: .connection) == "keep-alive")
+                #expect(res.headers[.contentType] == "text/event-stream")
+                #expect(res.headers[.cacheControl] == "no-cache")
+                #expect(res.headers[.connection] == "keep-alive")
             }
         }
     }
@@ -31,8 +32,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 #expect(body == "data: first\n\ndata: second\n\n")
             }
         }
@@ -46,8 +48,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 #expect(body == "event: ping\ndata: alive\n\n")
             }
         }
@@ -66,8 +69,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 // sortedKeys ensures deterministic output
                 #expect(body == "data: {\"count\":42,\"message\":\"hello\"}\n\n")
             }
@@ -86,8 +90,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 #expect(body == "event: status\ndata: {\"status\":\"ok\"}\n\n")
             }
         }
@@ -101,8 +106,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 #expect(body == ": keep-alive\n\n")
             }
         }
@@ -121,8 +127,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events")
+                let body = try await res.body.requireString()
                 #expect(body == "id: 1\nevent: message\nretry: 3000\ndata: hello\n\n")
             }
         }
@@ -137,8 +144,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events", headers: ["Last-Event-ID": "42"]) { res async in
-                let body = res.body.string
+            try await app.testing { client in
+                let res = try await client.get("events", headers: [.lastEventID: "42"])
+                let body = try await res.body.requireString()
                 #expect(body == "data: last-id: 42\n\n")
             }
         }
@@ -152,8 +160,9 @@ struct SSEIntegrationTests {
                 }
             }
 
-            try await app.testing().test(.GET, "events") { res async in
-                #expect(res.body.string == "data: via-static\n\n")
+            try await app.testing { client in
+                let res = try await client.get("events")
+                try #expect(await res.body.requireString() == "data: via-static\n\n")
             }
         }
     }

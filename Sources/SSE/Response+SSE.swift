@@ -1,5 +1,11 @@
-import Vapor
-import Foundation
+public import Vapor
+import HTTPTypes
+
+#if canImport(FoundationEssentials)
+public import FoundationEssentials
+#else
+public import Foundation
+#endif
 
 extension Response {
     /// Creates an SSE streaming response.
@@ -26,13 +32,12 @@ extension Response {
         Response(
             status: .ok,
             headers: [
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
+                .contentType: "text/event-stream",
+                .cacheControl: "no-cache",
+                .connection: "keep-alive",
             ],
-            body: .init(managedAsyncStream: { writer in
-                let context = SSEContext(writer: writer, encoder: encoder)
-                try await handler(context)
+            body: .init(stream: { writer in
+                try await SSEContext.run(writer: writer, encoder: encoder, handler)
             })
         )
     }

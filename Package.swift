@@ -1,20 +1,18 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.4
 
 import PackageDescription
 
 let package = Package(
     name: "vapor-sse",
     platforms: [
-        .macOS(.v10_15),
-        .iOS(.v13),
-        .tvOS(.v13),
-        .watchOS(.v6),
+        .macOS("26.2"),
+        .iOS("26.2"),
     ],
     products: [
         .library(name: "SSE", targets: ["SSE"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/vapor/vapor.git", from: "4.121.3"),
+        .package(url: "https://github.com/vapor/vapor.git", from: "5.0.0-beta.4"),
     ],
     targets: [
         .target(
